@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gravityforge"
+version = "1.0.0"
+authors = [
+  { name="Saarthak Ojha", email="vedantojha2612@gmail.com" },
+]
+description = "High-Performance Symplectic N-Body and Relativistic Slingshot Trajectory Engine with Live NASA JPL Horizons Ephemerides and Dual Visual HUDs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Astronomy",
+]
+dependencies = [
+    "numpy>=1.24.0",
+    "requests>=2.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+gravityforge = "cli:main"
+
+[project.urls]
+"Homepage" = "https://github.com/vedantojha2612-cyber/gravity-forge"
+"Bug Tracker" = "https://github.com/vedantojha2612-cyber/gravity-forge/issues"
+"Source" = "https://github.com/vedantojha2612-cyber/gravity-forge"

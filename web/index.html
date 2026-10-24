@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GravityForge // High-Performance N-Body & Slingshot Trajectory Canvas</title>
+  <style>
+    :root {
+      --bg: #030712;
+      --panel-bg: rgba(7, 12, 24, 0.78);
+      --panel-border: rgba(0, 240, 255, 0.22);
+      --cyan: #00f0ff;
+      --cyan-glow: rgba(0, 240, 255, 0.45);
+      --amber: #ffb800;
+      --crimson: #ff003c;
+      --green: #00ff88;
+      --purple: #b388ff;
+      --text: #e2e8f0;
+      --text-muted: #64748b;
+      --font-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font-mono);
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #webgl-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    /* Subtle CRT scanline and vignette overlay */
+    .overlay-vignette {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: radial-gradient(circle at center, transparent 50%, rgba(2, 4, 10, 0.88) 100%);
+      z-index: 2;
+    }
+
+    .overlay-scanlines {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.2) 50%);
+      background-size: 100% 4px;
+      z-index: 2;
+      opacity: 0.4;
+    }
+
+    /* HUD Layer */
+    .hud-layer {
+      position: absolute;
+      inset: 0;
+      z-index: 10;
+      pointer-events: none;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      grid-template-columns: 340px 1fr 360px;
+      padding: 18px;
+      gap: 16px;
+    }
+
+    .interactive {
+      pointer-events: auto;
+    }
+
+    /* Glassmorphism Panels */
+    .hud-panel {
+      background: var(--panel-bg);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid var(--panel-border);
+      border-radius: 8px;
+      box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.65), inset 0 0 12px rgba(0, 240, 255, 0.05);
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* Header Bar */
+    .header-bar {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 20px;
+      background: rgba(6, 11, 22, 0.85);
+      border-bottom: 1px solid var(--panel-border);
+      border-radius: 8px;
+    }
+
+    .brand-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      text-shadow: 0 0 12px var(--cyan-glow);
+    }
+
+    .brand-title span {
+      color: var(--cyan);
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background: rgba(0, 255, 136, 0.12);
+      border: 1px solid rgba(0, 255, 136, 0.35);
+      color: var(--green);
+      font-weight: 600;
+      letter-spacing: 1px;
+    }
+
+    .status-badge::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 2s infinite ease-in-out;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+
+    .section-title {
+      font-size: 11px;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--cyan);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-bottom: 1px solid rgba(0, 240, 255, 0.15);
+      padding-bottom: 6px;
+      margin-bottom: 4px;
+    }
+
+    .telemetry-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+    }
+
+    .telemetry-label {
+      color: var(--text-muted);
+    }
+
+    .telemetry-val {
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .val-cyan { color: var(--cyan); }
+    .val-amber { color: var(--amber); }
+    .val-green { color: var(--green); }
+    .val-crimson { color: var(--crimson); }
+    .val-purple { color: var(--purple); }
+
+    /* Button Controls */
+    .btn-group {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+
+    .btn {
+      background: rgba(0, 240, 255, 0.08);
+      border: 1px solid rgba(0, 240, 255, 0.25);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 8px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .btn:hover {
+      background: rgba(0, 240, 255, 0.22);
+      border-color: var(--cyan);
+      box-shadow: 0 0 10px var(--cyan-glow);
+      color: #fff;
+    }
+
+    .btn.active {
+      background: rgba(0, 240, 255, 0.35);
+      border-color: var(--cyan);
+      color: #fff;
+      box-shadow: inset 0 0 8px rgba(0, 240, 255, 0.4);
+    }
+
+    /* Sliders */
+    .slider-container {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.15);
+      border-radius: 2px;
+      outline: none;
+    }
+
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--cyan);
+      box-shadow: 0 0 8px var(--cyan);
+      cursor: pointer;
+    }
+
+    /* Live Energy Drift Strip Canvas */
+    #drift-canvas {
+      width: 100%;
+      height: 64px;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(0, 240, 255, 0.15);
+      border-radius: 4px;
+    }
+
+    /* Bottom Status Dock */
+    .bottom-bar {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 18px;
+      font-size: 11px;
+      color: var(--text-muted);
+      background: rgba(6, 11, 22, 0.85);
+      border-top: 1px solid var(--panel-border);
+      border-radius: 8px;
+    }
+
+    .bottom-bar a {
+      color: var(--cyan);
+      text-decoration: none;
+    }
+
+    .bottom-bar a:hover {
+      text-decoration: underline;
+    }
+
+    /* Target Reticle in 3D Space */
+    .nav-pills {
+      display: flex;
+      font-direction: column;
+      gap: 6px;
+      max-height: 170px;
+      overflow-y: auto;
+    }
+
+    .nav-pill {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .nav-pill:hover, .nav-pill.selected {
+      border-color: var(--cyan);
+      background: rgba(0, 240, 255, 0.12);
+    }
+  </style>
+  <!-- Load Local Three.js and OrbitControls with CDN fallback -->
+  <script src="vendor/three.min.js" onerror="this.onerror=null;this.src='https://unpkg.com/three@0.160.0/build/three.min.js'"></script>
+  <script src="vendor/OrbitControls.js" onerror="this.onerror=null;this.src='https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js'"></script>
+</head>
+<body>
+
+  <!-- WebGL Rendering Canvas -->
+  <div id="webgl-canvas"></div>
+  <div class="overlay-vignette"></div>
+  <div class="overlay-scanlines"></div>
+
+  <!-- HUD Interface Grid -->
+  <div class="hud-layer">
+    <!-- Top Bar -->
+    <header class="header-bar interactive">
+      <div class="brand-title">
+        ü™ê GRAVITY<span>FORGE</span>
+        <span style="font-size: 11px; color: var(--text-muted); font-weight: 400; letter-spacing: 0;">// N-Body & Slingshot Engine</span>
+      </div>
+      <div style="display: flex; gap: 14px; align-items: center;">
+        <div class="status-badge" id="integrator-badge">SYMPLECTIC LEAPFROG</div>
+        <div class="status-badge" id="fps-badge" style="border-color: rgba(0,240,255,0.3); background: rgba(0,240,255,0.1); color: var(--cyan);">60 FPS</div>
+      </div>
+    </header>
+
+    <!-- Left Controls Panel -->
+    <aside class="hud-panel interactive">
+      <div class="section-title">Mission Scenario</div>
+      <div class="btn-group">
+        <button class="btn active" id="btn-scen-inner" onclick="switchScenario('inner')">Inner System</button>
+        <button class="btn" id="btn-scen-slingshot" onclick="switchScenario('slingshot')">Jupiter Assist</button>
+        <button class="btn" id="btn-scen-3body" onclick="switchScenario('3body')">3-Body Choreography</button>
+        <button class="btn" id="btn-scen-lagrange" onclick="switchScenario('lagrange')">Lagrange Points</button>
+      </div>
+
+      <div class="section-title" style="margin-top: 8px;">Numerical Integrator</div>
+      <div class="btn-group">
+        <button class="btn active" id="btn-integ-leapfrog" onclick="setIntegrator('leapfrog')">Leapfrog (KDK)</button>
+        <button class="btn" id="btn-integ-rk4" onclick="setIntegrator('rk4')">Runge-Kutta 4</button>
+      </div>
+
+      <div class="section-title" style="margin-top: 8px;">Simulation Warp</div>
+      <div class="slider-container">
+        <div class="slider-header">
+          <span>Speed Multiplier</span>
+          <span class="val-cyan" id="speed-label">1.0x (1 day/sec)</span>
+        </div>
+        <input type="range" id="speed-slider" min="0.1" max="10.0" step="0.1" value="1.0" oninput="updateSpeed(this.value)">
+      </div>
+
+      <div class="btn-group" style="margin-top: 6px;">
+        <button class="btn" id="btn-pause" onclick="togglePause()">Pause</button>
+        <button class="btn" onclick="resetCurrentScenario()">Reset Epoch</button>
+      </div>
+
+      <div class="section-title" style="margin-top: 8px;">Camera Tracking</div>
+      <div class="btn-group">
+        <button class="btn active" id="cam-free" onclick="setCameraMode('free')">Orbit Center</button>
+        <button class="btn" id="cam-target" onclick="setCameraMode('target')">Follow Target</button>
+      </div>
+
+      <div class="section-title" style="margin-top: 8px;">Celestial Targets</div>
+      <div class="nav-pills" id="targets-list">
+        <!-- Injected via JavaScript -->
+      </div>
+    </aside>
+
+    <!-- Center Space (Blank for 3D visual interaction) -->
+    <div></div>
+
+    <!-- Right Telemetry Panel -->
+    <aside class="hud-panel interactive">
+      <div class="section-title">Kinematics & Conservation</div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Simulation Time:</span>
+        <span class="telemetry-val val-cyan" id="sim-time-val">T+0.00 Days</span>
+      </div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Kinetic Energy:</span>
+        <span class="telemetry-val" id="ke-val">0.0000e+00 J</span>
+      </div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Potential Energy:</span>
+        <span class="telemetry-val" id="pe-val">0.0000e+00 J</span>
+      </div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Total Mechanical E:</span>
+        <span class="telemetry-val" id="tot-e-val">0.0000e+00 J</span>
+      </div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Relative Drift |ŒîE/E‚ÇÄ|:</span>
+        <span class="telemetry-val val-green" id="drift-val">0.0000e-00</span>
+      </div>
+
+      <!-- Real-time drift mini strip chart -->
+      <div class="slider-header" style="margin-top: 4px;">
+        <span>Energy Error Drift Strip</span>
+        <span class="val-green" id="drift-status">PASS (&lt;10‚Åª‚Å∂)</span>
+      </div>
+      <canvas id="drift-canvas" width="300" height="64"></canvas>
+
+      <div class="section-title" style="margin-top: 10px;">Selected Body Keplerian Orbit</div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Target Name:</span>
+        <span class="telemetry-val val-amber" id="target-name-val">Earth</span>
+      </div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Distance (r):</span>
+        <span class="telemetry-val" id="target-dist-val">1.000 AU</span>
+      </div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Orbital Velocity (v):</span>
+        <span class="telemetry-val val-cyan" id="target-vel-val">29.78 km/s</span>
+      </div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Semi-major Axis (a):</span>
+        <span class="telemetry-val" id="target-sma-val">1.000 AU</span>
+      </div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Eccentricity (e):</span>
+        <span class="telemetry-val" id="target-ecc-val">0.0167</span>
+      </div>
+      <div class="telemetry-row">
+        <span class="telemetry-label">Orbital Period (T):</span>
+        <span class="telemetry-val" id="target-period-val">365.25 Days</span>
+      </div>
+
+      <!-- Gravitational Assist Specific Card (hidden if not slingshot) -->
+      <div id="slingshot-card" style="display: none; border-top: 1px dashed rgba(255,184,0,0.3); padding-top: 8px;">
+        <div class="section-title" style="color: var(--amber);">‚ö° Slingshot Telemetry</div>
+        <div class="telemetry-row">
+          <span class="telemetry-label">Periapsis Velocity:</span>
+          <span class="telemetry-val val-amber" id="ss-vmax">30.06 km/s</span>
+        </div>
+        <div class="telemetry-row">
+          <span class="telemetry-label">Total Œîv Boost:</span>
+          <span class="telemetry-val" id="ss-deltav">+13,940 m/s</span>
+        </div>
+      </div>
+    </aside>
+
+
+    <!-- Bottom Dock -->
+    <footer class="bottom-bar interactive">
+      <div>
+        Gravitational Constant $G = 6.67430 \times 10^{-11} \text{ m}^3\text{kg}^{-1}\text{s}^{-2}$ ¬∑ Plummer Softening $\epsilon = 1.0\text{ km}$
+      </div>
+      <div>
+        <span>Engine: <strong>GravityForge Core v1.0</strong></span> ¬∑ 
+        <span>Designed by <strong style="color: var(--cyan);">@ITACHI (UI UX DESIGNER)</strong></span>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    // --- Physical Constants ---
+    const G = 6.67430e-11;
+    const AU = 1.495978707e11;
+    const SOLAR_MASS = 1.98847e30;
+    const DAY = 86400.0;
+
+    // Display scale factor (meters to Three.js world units)
+    const SCALE = 20.0 / AU;
+
+    // --- State Variables ---
+    let scene, camera, renderer, controls;
+    let bodies = [];
+    let meshes = [];
+    let trails = [];
+    let simTime = 0.0;
+    let isPaused = false;
+    let timeScale = 1.0; // 1 second = 1 day
+    let currentScenario = 'inner';
+    let currentIntegrator = 'leapfrog';
+    let selectedBodyIndex = 3; // Earth default
+    let cameraMode = 'free'; // 'free' or 'target'
+    let initialEnergy = 0;
+    let driftHistory = [];
+
+    // --- 3D Scene Initialization ---
+    function initScene() {
+      const container = document.getElementById('webgl-canvas');
+      scene = new THREE.Scene();
+      scene.fog = new THREE.FogExp2(0x030712, 0.001);
+
+      camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 2000);
+      camera.position.set(0, 40, 50);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      container.appendChild(renderer.domElement);
+
+      if (typeof THREE.OrbitControls !== 'undefined') {
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.maxDistance = 800;
+        controls.minDistance = 2;
+      }
+
+      // Starfield Particle Field
+      const starGeo = new THREE.BufferGeometry();
+      const starCount = 3500;
+      const starPos = new Float32Array(starCount * 3);
+      const starColors = new Float32Array(starCount * 3);
+      for (let i = 0; i < starCount * 3; i += 3) {
+        starPos[i] = (Math.random() - 0.5) * 1200;
+        starPos[i+1] = (Math.random() - 0.5) * 1200;
+        starPos[i+2] = (Math.random() - 0.5) * 1200;
+        const tint = Math.random();
+        starColors[i] = tint > 0.8 ? 0.7 : (tint < 0.2 ? 0.9 : 1.0);
+        starColors[i+1] = tint > 0.8 ? 0.9 : (tint < 0.2 ? 0.7 : 1.0);
+        starColors[i+2] = 1.0;
+      }
+      starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+      starGeo.setAttribute('color', new THREE.BufferAttribute(starColors, 3));
+      const starMat = new THREE.PointsMaterial({ size: 1.2, vertexColors: true, transparent: true, opacity: 0.85 });
+      const starField = new THREE.Points(starGeo, starMat);
+      scene.add(starField);
+
+      // Ambient & Directional Lights
+      const ambientLight = new THREE.AmbientLight(0x223344, 0.4);
+      scene.add(ambientLight);
+
+      // Sun Point Light
+      const sunLight = new THREE.PointLight(0xffffff, 2.5, 500, 0.2);
+      scene.add(sunLight);
+
+      // Orbital Grid Plane
+      const grid = new THREE.GridHelper(100, 40, 0x00f0ff, 0x112233);
+      grid.position.y = -0.05;
+      grid.material.opacity = 0.2;
+      grid.material.transparent = true;
+      scene.add(grid);
+
+      window.addEventListener('resize', onWindowResize);
+      loadScenario('inner');
+      animate();
+    }
+
+    // --- Scenario Definitions ---
+    function loadScenario(type) {
+      currentScenario = type;
+      simTime = 0.0;
+      driftHistory = [];
+
+      // Clean old meshes and trails
+      meshes.forEach(m => scene.remove(m));
+      trails.forEach(t => scene.remove(t.line));
+      meshes = [];
+      trails = [];
+      bodies = [];
+
+      const docSlingshot = document.getElementById('slingshot-card');
+      if (docSlingshot) docSlingshot.style.display = type === 'slingshot' ? 'block' : 'none';
+
+      if (type === 'inner') {
+        // Inner Solar System (SI units)
+        bodies = [
+          { name: 'Sun', mass: 1.98847e30, pos: [0, 0, 0], vel: [0, 0, 0], radius: 1.4, color: 0xffd000, emissive: true },
+          { name: 'Mercury', mass: 3.301e23, pos: [5.79e10, 0, 0], vel: [0, 47360, 0], radius: 0.35, color: 0xaaaaaa },
+          { name: 'Venus', mass: 4.867e24, pos: [1.082e11, 0, 0], vel: [0, 35020, 0], radius: 0.55, color: 0xffa500 },
+          { name: 'Earth', mass: 5.972e24, pos: [1.496e11, 0, 0], vel: [0, 29780, 0], radius: 0.6, color: 0x1e90ff },
+          { name: 'Mars', mass: 6.417e23, pos: [2.279e11, 0, 0], vel: [0, 24070, 0], radius: 0.45, color: 0xff4500 }
+        ];
+        selectedBodyIndex = 3;
+      } else if (type === 'slingshot') {
+        // Jupiter Gravitational Assist (Voyager-style slingshot)
+        bodies = [
+          { name: 'Jupiter', mass: 1.898e27, pos: [0, 0, 0], vel: [0, 0, 0], radius: 2.2, color: 0xd9a066 },
+          { name: 'Io', mass: 8.93e22, pos: [4.217e8, 0, 0], vel: [0, 17334, 0], radius: 0.25, color: 0xffff88 },
+          { name: 'Europa', mass: 4.8e22, pos: [6.709e8, 0, 0], vel: [0, 13740, 0], radius: 0.28, color: 0xaaccff },
+          { name: 'Voyager Probe', mass: 825.0, pos: [-3.5e9, 4.0e8, 0], vel: [16120, -2200, 0], radius: 0.35, color: 0x00f0ff }
+        ];
+        selectedBodyIndex = 3;
+      } else if (type === '3body') {
+        // Stable Figure-Eight 3-Body Choreography
+        const m = 1.0e30;
+        const x1 = 0.97000436 * AU;
+        const y1 = -0.24308753 * AU;
+        const vx = 0.46620531 * 29780;
+        const vy = 0.43236573 * 29780;
+        bodies = [
+          { name: 'Alpha', mass: m, pos: [x1, y1, 0], vel: [-vx/2, -vy/2, 0], radius: 0.8, color: 0x00f0ff },
+          { name: 'Beta', mass: m, pos: [-x1, -y1, 0], vel: [-vx/2, -vy/2, 0], radius: 0.8, color: 0xff0055 },
+          { name: 'Gamma', mass: m, pos: [0, 0, 0], vel: [vx, vy, 0], radius: 0.8, color: 0xffd000 }
+        ];
+        selectedBodyIndex = 0;
+      } else if (type === 'lagrange') {
+        // Earth-Moon with L1-L5 points
+        bodies = [
+          { name: 'Earth', mass: 5.972e24, pos: [0, 0, 0], vel: [0, 0, 0], radius: 1.5, color: 0x1e90ff },
+          { name: 'Moon', mass: 7.342e22, pos: [3.844e8, 0, 0], vel: [0, 1022, 0], radius: 0.4, color: 0xcccccc },
+          { name: 'JWST @ L2', mass: 6161.0, pos: [4.42e8, 0, 0], vel: [0, 1175, 0], radius: 0.3, color: 0xffb800 }
+        ];
+        selectedBodyIndex = 2;
+      }
+
+      // Create Three.js meshes and dynamic trajectory line buffers
+      bodies.forEach((b, idx) => {
+        const geo = new THREE.SphereGeometry(b.radius, 32, 32);
+        let mat;
+        if (b.emissive) {
+          mat = new THREE.MeshBasicMaterial({ color: b.color });
+        } else {
+          mat = new THREE.MeshStandardMaterial({ color: b.color, roughness: 0.4, metalness: 0.2 });
+        }
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(b.pos[0] * SCALE, b.pos[2] * SCALE, -b.pos[1] * SCALE);
+        scene.add(mesh);
+        meshes.push(mesh);
+
+        // Trajectory trail
+        const maxPoints = 500;
+        const trailGeo = new THREE.BufferGeometry();
+        const positions = new Float32Array(maxPoints * 3);
+        trailGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const trailMat = new THREE.LineBasicMaterial({ color: b.color, transparent: true, opacity: 0.6 });
+        const trailLine = new THREE.Line(trailGeo, trailMat);
+        scene.add(trailLine);
+        trails.push({ line: trailLine, points: [], maxPoints });
+      });
+
+      populateTargetsList();
+      initialEnergy = computeEnergy().total;
+    }
+
+    function populateTargetsList() {
+      const list = document.getElementById('targets-list');
+      list.innerHTML = '';
+      bodies.forEach((b, idx) => {
+        const item = document.createElement('div');
+        item.className = 'nav-pill' + (idx === selectedBodyIndex ? ' selected' : '');
+        item.innerHTML = `<span>‚óè ${b.name}</span><span style="color:var(--text-muted);">${(b.mass).toExponential(1)} kg</span>`;
+        item.onclick = () => selectTarget(idx);
+        list.appendChild(item);
+      });
+    }
+
+    function selectTarget(idx) {
+      selectedBodyIndex = idx;
+      document.querySelectorAll('.nav-pill').forEach((el, i) => {
+        el.className = 'nav-pill' + (i === idx ? ' selected' : '');
+      });
+      document.getElementById('target-name-val').textContent = bodies[idx].name;
+    }
+
+    // --- Numerical Physics Engine (Kick-Drift-Kick & RK4) ---
+    function computeAccelerations(positions) {
+      const n = positions.length;
+      const acc = Array.from({ length: n }, () => [0, 0, 0]);
+      const softeningSq = 1e6 * 1e6; // 1,000 km softening
+
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          const dx = positions[j][0] - positions[i][0];
+          const dy = positions[j][1] - positions[i][1];
+          const dz = positions[j][2] - positions[i][2];
+          const distSq = dx * dx + dy * dy + dz * dz + softeningSq;
+          const dist = Math.sqrt(distSq);
+          const force = G / (distSq * dist);
+
+          const f_ij = force * bodies[j].mass;
+          const f_ji = force * bodies[i].mass;
+
+          acc[i][0] += f_ij * dx;
+          acc[i][1] += f_ij * dy;
+          acc[i][2] += f_ij * dz;
+
+          acc[j][0] -= f_ji * dx;
+          acc[j][1] -= f_ji * dy;
+          acc[j][2] -= f_ji * dz;
+        }
+      }
+      return acc;
+    }
+
+    function stepPhysics(dt) {
+      const n = bodies.length;
+      const pos = bodies.map(b => [...b.pos]);
+      const vel = bodies.map(b => [...b.vel]);
+
+      if (currentIntegrator === 'leapfrog') {
+        // Kick-Drift-Kick Symplectic Leapfrog
+        const acc0 = computeAccelerations(pos);
+        const vHalf = vel.map((v, i) => [
+          v[0] + 0.5 * dt * acc0[i][0],
+          v[1] + 0.5 * dt * acc0[i][1],
+          v[2] + 0.5 * dt * acc0[i][2]
+        ]);
+        const posNew = pos.map((p, i) => [
+          p[0] + dt * vHalf[i][0],
+          p[1] + dt * vHalf[i][1],
+          p[2] + dt * vHalf[i][2]
+        ]);
+        const acc1 = computeAccelerations(posNew);
+        const velNew = vHalf.map((vh, i) => [
+          vh[0] + 0.5 * dt * acc1[i][0],
+          vh[1] + 0.5 * dt * acc1[i][1],
+          vh[2] + 0.5 * dt * acc1[i][2]
+        ]);
+
+        for (let i = 0; i < n; i++) {
+          bodies[i].pos = posNew[i];
+          bodies[i].vel = velNew[i];
+        }
+      } else {
+        // Classical 4th-Order Runge-Kutta
+        const k1_v = vel;
+        const k1_a = computeAccelerations(pos);
+
+        const pos_k2 = pos.map((p, i) => [p[0] + 0.5 * dt * k1_v[i][0], p[1] + 0.5 * dt * k1_v[i][1], p[2] + 0.5 * dt * k1_v[i][2]]);
+        const vel_k2 = vel.map((v, i) => [v[0] + 0.5 * dt * k1_a[i][0], v[1] + 0.5 * dt * k1_a[i][1], v[2] + 0.5 * dt * k1_a[i][2]]);
+        const k2_a = computeAccelerations(pos_k2);
+
+        const pos_k3 = pos.map((p, i) => [p[0] + 0.5 * dt * vel_k2[i][0], p[1] + 0.5 * dt * vel_k2[i][1], p[2] + 0.5 * dt * vel_k2[i][2]]);
+        const vel_k3 = vel.map((v, i) => [v[0] + 0.5 * dt * k2_a[i][0], v[1] + 0.5 * dt * k2_a[i][1], v[2] + 0.5 * dt * k2_a[i][2]]);
+        const k3_a = computeAccelerations(pos_k3);
+
+        const pos_k4 = pos.map((p, i) => [p[0] + dt * vel_k3[i][0], p[1] + dt * vel_k3[i][1], p[2] + dt * vel_k3[i][2]]);
+        const vel_k4 = vel.map((v, i) => [v[0] + dt * k3_a[i][0], v[1] + dt * k3_a[i][1], v[2] + dt * k3_a[i][2]]);
+        const k4_a = computeAccelerations(pos_k4);
+
+        for (let i = 0; i < n; i++) {
+          bodies[i].pos = [
+            pos[i][0] + (dt / 6.0) * (k1_v[i][0] + 2 * vel_k2[i][0] + 2 * vel_k3[i][0] + vel_k4[i][0]),
+            pos[i][1] + (dt / 6.0) * (k1_v[i][1] + 2 * vel_k2[i][1] + 2 * vel_k3[i][1] + vel_k4[i][1]),
+            pos[i][2] + (dt / 6.0) * (k1_v[i][2] + 2 * vel_k2[i][2] + 2 * vel_k3[i][2] + vel_k4[i][2])
+          ];
+          bodies[i].vel = [
+            vel[i][0] + (dt / 6.0) * (k1_a[i][0] + 2 * k2_a[i][0] + 2 * k3_a[i][0] + k4_a[i][0]),
+            vel[i][1] + (dt / 6.0) * (k1_a[i][1] + 2 * k2_a[i][1] + 2 * k3_a[i][1] + k4_a[i][1]),
+            vel[i][2] + (dt / 6.0) * (k1_a[i][2] + 2 * k2_a[i][2] + 2 * k3_a[i][2] + k4_a[i][2])
+          ];
+        }
+      }
+
+      simTime += dt;
+    }
+
+    function computeEnergy() {
+      let ke = 0;
+      let pe = 0;
+      const n = bodies.length;
+      for (let i = 0; i < n; i++) {
+        const vSq = bodies[i].vel[0]**2 + bodies[i].vel[1]**2 + bodies[i].vel[2]**2;
+        ke += 0.5 * bodies[i].mass * vSq;
+        for (let j = i + 1; j < n; j++) {
+          const dx = bodies[j].pos[0] - bodies[i].pos[0];
+          const dy = bodies[j].pos[1] - bodies[i].pos[1];
+          const dz = bodies[j].pos[2] - bodies[i].pos[2];
+          const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+          if (dist > 0) pe -= (G * bodies[i].mass * bodies[j].mass) / dist;
+        }
+      }
+      return { ke, pe, total: ke + pe };
+    }
+
+    // --- Main Animation & Telemetry Loop ---
+    let lastFrame = performance.now();
+    let frameCount = 0;
+    let fpsTime = 0;
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const now = performance.now();
+      const deltaSec = (now - lastFrame) / 1000.0;
+      lastFrame = now;
+
+      frameCount++;
+      fpsTime += deltaSec;
+      if (fpsTime >= 0.5) {
+        const fps = Math.round(frameCount / fpsTime);
+        document.getElementById('fps-badge').textContent = `${fps} FPS`;
+        frameCount = 0;
+        fpsTime = 0;
+      }
+
+      if (!isPaused) {
+        // Real-time integration step
+        const dt = DAY * timeScale * Math.min(deltaSec, 0.05);
+        stepPhysics(dt);
+
+        // Update meshes and trajectory trails
+        bodies.forEach((b, idx) => {
+          const wx = b.pos[0] * SCALE;
+          const wy = b.pos[2] * SCALE;
+          const wz = -b.pos[1] * SCALE;
+          meshes[idx].position.set(wx, wy, wz);
+
+          // Update trail line buffer
+          const trail = trails[idx];
+          trail.points.push(wx, wy, wz);
+          if (trail.points.length > trail.maxPoints * 3) {
+            trail.points.splice(0, 3);
+          }
+          const posAttr = trail.line.geometry.attributes.position;
+          for (let p = 0; p < trail.points.length; p++) {
+            posAttr.array[p] = trail.points[p];
+          }
+          posAttr.needsUpdate = true;
+          trail.line.geometry.setDrawRange(0, trail.points.length / 3);
+        });
+
+        // Update Camera in Target Mode
+        if (cameraMode === 'target' && meshes[selectedBodyIndex] && controls) {
+          const targetPos = meshes[selectedBodyIndex].position;
+          controls.target.lerp(targetPos, 0.08);
+        }
+      }
+
+      if (controls) controls.update();
+      renderer.render(scene, camera);
+      updateTelemetryHUD();
+    }
+
+    // --- Telemetry HUD & Strip Chart Renderer ---
+    function updateTelemetryHUD() {
+      document.getElementById('sim-time-val').textContent = `T+${(simTime / DAY).toFixed(2)} Days`;
+
+      const e = computeEnergy();
+      document.getElementById('ke-val').textContent = e.ke.toExponential(4) + ' J';
+      document.getElementById('pe-val').textContent = e.pe.toExponential(4) + ' J';
+      document.getElementById('tot-e-val').textContent = e.total.toExponential(4) + ' J';
+
+      const drift = Math.abs(initialEnergy) > 1e-12 ? Math.abs((e.total - initialEnergy) / initialEnergy) : 0;
+      const driftEl = document.getElementById('drift-val');
+      driftEl.textContent = drift.toExponential(4);
+      driftEl.className = 'telemetry-val ' + (drift < 1e-6 ? 'val-green' : (drift < 1e-3 ? 'val-amber' : 'val-crimson'));
+
+      // Selected body telemetry
+      if (bodies[selectedBodyIndex]) {
+        const b = bodies[selectedBodyIndex];
+        const distAU = Math.sqrt(b.pos[0]**2 + b.pos[1]**2 + b.pos[2]**2) / AU;
+        const velKms = Math.sqrt(b.vel[0]**2 + b.vel[1]**2 + b.vel[2]**2) / 1000.0;
+        document.getElementById('target-dist-val').textContent = `${distAU.toFixed(3)} AU`;
+        document.getElementById('target-vel-val').textContent = `${velKms.toFixed(2)} km/s`;
+
+        // Simplified Keplerian approximations for HUD display
+        const mu = G * (bodies[0].mass + b.mass);
+        const A»ÄÙÅë•Õ—TÄ®ÅTÏ(ÄÄÄÄÄÄÄÅçΩπÕ–ÅÿÄÙÅŸï±-µÃÄ®Äƒ¿¿¿∏¿Ï(ÄÄÄÄÄÄÄÅçΩπÕ–ÅÕµÑÄÙÄƒ∏¿ÄºÄ†»∏¿ÄºÅ»Ä¥Ä°ÿÄ®Åÿ§ÄºÅµ‘§Ï(ÄÄÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ù—Ö…ùï–µÕµÑµŸÖ∞ú§π—ï·—Ωπ—ïπ–ÄÙÅÄëÏ°ÕµÑÄºÅT§π—Ω•·ïê†Ã•ÙÅUÄÏ(ÄÄÄÄÄÄÄÅçΩπÕ–Å¡ï…•ΩëÖÂÃÄÙÄ†»Ä®Å5Ö—†πA$Ä®Å5Ö—†πÕ≈…–°5Ö—†πµÖ‡†¿∞ÅÕµÑ®®Ã§ÄºÅµ‘§§ÄºÅdÏ(ÄÄÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ù—Ö…ùï–µ¡ï…•ΩêµŸÖ∞ú§π—ï·—Ωπ—ïπ–ÄÙÅ•Õ•π•—î°¡ï…•ΩëÖÂÃ§Ä¸ÅÄëÌ¡ï…•ΩëÖÂÃπ—Ω•·ïê†ƒ•ÙÅÖÂÕÄÄËÄù!Â¡ï…âΩ±•åúÏ(ÄÄÄÄÄÅÙ((ÄÄÄÄÄÄººÅ…Ö‹Åπï…ù‰Å……Ω»Å…•ô–ÅM—…•¿(ÄÄÄÄÄÅë…•ô—!•Õ—Ω…‰π¡’Õ†°ë…•ô–§Ï(ÄÄÄÄÄÅ•òÄ°ë…•ô—!•Õ—Ω…‰π±ïπù—†Ä¯Äƒ¿¿§Åë…•ô—!•Õ—Ω…‰πÕ°•ô–†§Ï(ÄÄÄÄÄÅë…Ö›…•ô—ÖπŸÖÃ†§Ï(ÄÄÄÅÙ((ÄÄÄÅô’πç—•Ω∏Åë…Ö›…•ô—ÖπŸÖÃ†§ÅÏ(ÄÄÄÄÄÅçΩπÕ–ÅçŸÃÄÙÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ùë…•ô–µçÖπŸÖÃú§Ï(ÄÄÄÄÄÅçΩπÕ–Åç—‡ÄÙÅçŸÃπùï—Ωπ—ï·–†ú…êú§Ï(ÄÄÄÄÄÅçΩπÕ–Å‹ÄÙÅçŸÃπ›•ë—†Ï(ÄÄÄÄÄÅçΩπÕ–Å†ÄÙÅçŸÃπ°ï•ù°–Ï(ÄÄÄÄÄÅç—‡πç±ïÖ…Iïç–†¿∞Ä¿∞Å‹∞Å†§Ï((ÄÄÄÄÄÄººÅ…•êÅ±•πîÅÖ–Äƒ¡x¥ÿÅ—°…ïÕ°Ω±ê(ÄÄÄÄÄÅç—‡πÕ—…Ω≠ïM—Â±îÄÙÄù…ùâÑ†¿∞Ä»–¿∞Ä»‘‘∞Ä¿∏ƒ‘§úÏ(ÄÄÄÄÄÅç—‡π±•πï]•ë—†ÄÙÄƒÏ(ÄÄÄÄÄÅç—‡πâïù•πAÖ—††§Ï(ÄÄÄÄÄÅç—‡πµΩŸïQº†¿∞Å†Ä®Ä¿∏‘§Ï(ÄÄÄÄÄÅç—‡πµ•πïQº°‹∞Å†Ä®Ä¿∏‘§Ï(ÄÄÄÄÄÅç—‡πÕ—…Ω≠î†§Ï((ÄÄÄÄÄÅ•òÄ°ë…•ô—!•Õ—Ω…‰π±ïπù—†ÄÄ»§Å…ï—’…∏Ï((ÄÄÄÄÄÅç—‡πâïù•πAÖ—††§Ï(ÄÄÄÄÄÅç—‡πÕ—…Ω≠ïM—Â±îÄÙÄúå¿¡ôò‡‡úÏ(ÄÄÄÄÄÅç—‡π±•πï]•ë—†ÄÙÄƒ∏‡Ï(ÄÄÄÄÄÅôΩ»Ä°±ï–Å§ÄÙÄ¿ÏÅ§ÄÅë…•ô—!•Õ—Ω…‰π±ïπù—†ÏÅ§¨¨§ÅÏ(ÄÄÄÄÄÄÄÅçΩπÕ–Å‡ÄÙÄ°§ÄºÄƒ¿¿§Ä®Å‹Ï(ÄÄÄÄÄÄÄÅçΩπÕ–ÅπΩ…¥ÄÙÅ5Ö—†πµ•∏†ƒ∏¿∞Åë…•ô—!•Õ—Ω…Âm•tÄºÄ≈î¥‘§Ï(ÄÄÄÄÄÄÄÅçΩπÕ–Å‰ÄÙÅ†Ä¥Ä°πΩ…¥Ä®Ä°†Ä¥Ä‡§Ä¨Ä–§Ï(ÄÄÄÄÄÄÄÅ•òÄ°§ÄÙÙÙÄ¿§Åç—‡πµΩŸïQº°‡∞Å‰§Ï(ÄÄÄÄÄÄÄÅï±ÕîÅç—‡π±•πïQº°‡∞Å‰§Ï(ÄÄÄÄÄÅÙ(ÄÄÄÄÄÅç—‡πÕ—…Ω≠î†§Ï(ÄÄÄÅÙ((ÄÄÄÄººÄ¥¥¥ÅU$ÅΩπ—…Ω±ÃÅ!ï±¡ï…ÃÄ¥¥¥(ÄÄÄÅô’πç—•Ω∏ÅÕ›•—ç°MçïπÖ…•º°Õçï∏§ÅÏ(ÄÄÄÄÄÅlù•ππï»ú∞ÄùÕ±•πùÕ°Ω–ú∞ÄúÕâΩë‰ú∞Äù±Öù…ÖπùîùtπôΩ…Öç†°ÃÄÙ¯ÅÏ(ÄÄÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê°Åâ—∏µÕçï∏¥ëÌÕıÄ§πç±ÖÕÕ9ÖµîÄÙÄùâ—∏úÄ¨Ä°ÃÄÙÙÙÅÕçï∏Ä¸ÄúÅÖç—•ŸîúÄËÄúú§Ï(ÄÄÄÄÄÅÙ§Ï(ÄÄÄÄÄÅ±ΩÖëMçïπÖ…•º°Õçï∏§Ï(ÄÄÄÅÙ((ÄÄÄÅô’πç—•Ω∏ÅÕï—%π—ïù…Ö—Ω»°•π—ïú§ÅÏ(ÄÄÄÄÄÅç’……ïπ—%π—ïù…Ö—Ω»ÄÙÅ•π—ïúÏ(ÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ùâ—∏µ•π—ïúµ±ïÖ¡ô…Ωúú§πç±ÖÕÕ9ÖµîÄÙÄùâ—∏úÄ¨Ä°•π—ïúÄÙÙÙÄù±ïÖ¡ô…ΩúúÄ¸ÄúÅÖç—•ŸîúÄËÄúú§Ï(ÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ùâ—∏µ•π—ïúµ…¨–ú§πç±ÖÕÕ9ÖµîÄÙÄùâ—∏úÄ¨Ä°•π—ïúÄÙÙÙÄù…¨–úÄ¸ÄúÅÖç—•ŸîúÄËÄúú§Ï(ÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ù•π—ïù…Ö—Ω»µâÖëùîú§π—ï·—Ωπ—ïπ–ÄÙÅ•π—ïúÄÙÙÙÄù±ïÖ¡ô…ΩúúÄ¸ÄùMe5A1Q%Å1AI=úÄËÄùIU9µ-UQQÄ–úÏ(ÄÄÄÅÙ((ÄÄÄÅô’πç—•Ω∏Å’¡ëÖ—ïM¡ïïê°ŸÖ∞§ÅÏ(ÄÄÄÄÄÅ—•µïMçÖ±îÄÙÅ¡Ö…Õï±ΩÖ–°ŸÖ∞§Ï(ÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ùÕ¡ïïêµ±Öâï∞ú§π—ï·—Ωπ—ïπ–ÄÙÅÄëÌ—•µïMçÖ±îπ—Ω•·ïê†ƒ•ı‡Ä†ëÌ—•µïMçÖ±îπ—Ω•·ïê†ƒ•ÙÅëÖ‰ΩÕïå•ÄÏ(ÄÄÄÅÙ((ÄÄÄÅô’πç—•Ω∏Å—Ωùù±ïAÖ’Õî†§ÅÏ(ÄÄÄÄÄÅ•ÕAÖ’ÕïêÄÙÄÖ•ÕAÖ’ÕïêÏ(ÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ùâ—∏µ¡Ö’Õîú§π—ï·—Ωπ—ïπ–ÄÙÅ•ÕAÖ’ÕïêÄ¸ÄùIïÕ’µîúÄËÄùAÖ’ÕîúÏ(ÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ùâ—∏µ¡Ö’Õîú§πç±ÖÕÕ9ÖµîÄÙÄùâ—∏úÄ¨Ä°•ÕAÖ’ÕïêÄ¸ÄúÅÖç—•ŸîúÄËÄúú§Ï(ÄÄÄÅÙ((ÄÄÄÅô’πç—•Ω∏Å…ïÕï—’……ïπ—MçïπÖ…•º†§ÅÏ(ÄÄÄÄÄÅ±ΩÖëMçïπÖ…•º°ç’……ïπ—MçïπÖ…•º§Ï(ÄÄÄÅÙ((ÄÄÄÅô’πç—•Ω∏ÅÕï—Öµï…Ö5Ωëî°µΩëî§ÅÏ(ÄÄÄÄÄÅçÖµï…Ö5ΩëîÄÙÅµΩëîÏ(ÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ùçÖ¥µô…ïîú§πç±ÖÕÕ9ÖµîÄÙÄùâ—∏úÄ¨Ä°µΩëîÄÙÙÙÄùô…ïîúÄ¸ÄúÅÖç—•ŸîúÄËÄúú§Ï(ÄÄÄÄÄÅëΩç’µïπ–πùï—±ïµïπ—	Â%ê†ùçÖ¥µ—Ö…ùï–ú§πç±ÖÕÕ9ÖµîÄÙÄùâ—∏úÄ¨Ä°µΩëîÄÙÙÙÄù—Ö…ùï–úÄ¸ÄúÅÖç—•ŸîúÄËÄúú§Ï(ÄÄÄÅÙ((ÄÄÄÅô’πç—•Ω∏ÅΩπ]•πëΩ›IïÕ•Èî†§ÅÏ(ÄÄÄÄÄÅçÖµï…ÑπÖÕ¡ïç–ÄÙÅ›•πëΩ‹π•ππï…]•ë—†ÄºÅ›•πëΩ‹π•ππï…!ï•ù°–Ï(ÄÄÄÄÄÅçÖµï…Ñπ’¡ëÖ—ïA…Ω©ïç—•Ωπ5Ö—…•‡†§Ï(ÄÄÄÄÄÅ…ïπëï…ï»πÕï—M•Èî°›•πëΩ‹π•ππï…]•ë—†∞Å›•πëΩ‹π•ππï…!ï•ù°–§Ï(ÄÄÄÅÙ((ÄÄÄÄººÅ1Ö’πç†ÅÕçïπîÅΩ∏Å±ΩÖê(ÄÄÄÅ›•πëΩ‹πÖëëŸïπ—1•Õ—ïπï»†ù=5Ωπ—ïπ—1ΩÖëïêú∞Å•π•—Mçïπî§Ï(ÄÄΩÕç…•¡–¯(ΩâΩë‰¯(Ω°—µ∞¯(
